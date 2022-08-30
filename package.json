@@ -1,0 +1,24 @@
+{
+  "name": "usewebrtc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alecfriedman3/useWebRTC.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/alecfriedman3/useWebRTC/issues"
+  },
+  "homepage": "https://github.com/alecfriedman3/useWebRTC#readme",
+  "dependencies": {
+    "firebase": "^9.9.3",
+    "react": "^18.2.0"
+  }
+}
