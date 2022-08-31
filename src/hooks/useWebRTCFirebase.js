@@ -7,6 +7,8 @@ const useWebRTCFirebase = ({ db, participantId }) => {
     const {
         localStream,
         participants,
+        shareScreen,
+        endScreenShare,
         hasParticipant,
         addingParticipant,
         joinRoom,
@@ -37,7 +39,45 @@ const useWebRTCFirebase = ({ db, participantId }) => {
             const callParticipantDocRef = doc(callParticipantsCollectionRef, participantId);
             await setDoc(callParticipantDocRef, { participantId });
         }, [roomId, db, participantId]),
-        onLeave: () => {},
+        onLeave: async () => {
+            const callDocRef = doc(db, "calls", roomId);
+
+            const callParticipantsCollectionRef = collection(callDocRef, "participants");
+            const participantCollectionSnapshot = await getDocs(callParticipantsCollectionRef)
+            const pids = [];
+            participantCollectionSnapshot.forEach(p => pids.push(p.data().participantId));
+            await Promise.all(pids.map(async pid => {
+                if (pid === participantId) return;
+                const answersForMeRef = doc(callParticipantsCollectionRef, pid, 'answers', participantId);
+                await deleteDoc(answersForMeRef);
+                const offersForMeRef = doc(callParticipantsCollectionRef, pid, 'offers', participantId);
+                await deleteDoc(offersForMeRef);
+                const myAnswersRef = doc(callParticipantsCollectionRef, participantId, 'answers', pid);
+                await deleteDoc(myAnswersRef);
+                const myOffersRef = doc(callParticipantsCollectionRef, participantId, 'offers', pid);
+                await deleteDoc(myOffersRef);
+
+                const iceCandidatesForMeRef = collection(callParticipantsCollectionRef, pid, 'iceCandidates', participantId, 'candidates');
+                const iceCandidatesForMe = await getDocs(iceCandidatesForMeRef);
+                const iceCandidateDeletes = [];
+                iceCandidatesForMe.forEach(c => iceCandidateDeletes.push(
+                    deleteDoc(doc(iceCandidatesForMeRef, c.id))
+                ));
+                await Promise.all(iceCandidateDeletes);
+                await deleteDoc(doc(callParticipantsCollectionRef, pid, 'iceCandidates', participantId));
+
+                const myIceCandidatesRef = collection(callParticipantsCollectionRef, participantId, 'iceCandidates', pid, 'candidates');
+                const myIceCandidates = await getDocs(myIceCandidatesRef);
+                const myIceCandidatesDeletes = [];
+                myIceCandidates.forEach(c => myIceCandidatesDeletes.push(
+                    deleteDoc(doc(myIceCandidatesRef, c.id))
+                ));
+                await Promise.all(iceCandidateDeletes);
+                await deleteDoc(doc(callParticipantsCollectionRef, participantId, 'iceCandidates', pid))
+            }))
+            await deleteDoc(doc(callDocRef, 'participants', participantId));
+            setRoomId('');
+        },
         onIceCandidate: async (participantFor, iceCandidate) => {
             // send ice candidate to firestore
             const callDocRef = doc(db, "calls", roomId);
@@ -113,6 +153,8 @@ const useWebRTCFirebase = ({ db, participantId }) => {
     return {
         localStream,
         participants,
+        shareScreen,
+        endScreenShare,
         createRoom: useCallback(async () => {
             const callsCollectionRef = collection(db, "calls");
             const newCall = await addDoc(callsCollectionRef, {});
@@ -127,7 +169,7 @@ const useWebRTCFirebase = ({ db, participantId }) => {
             participantCollectionSnapshot.forEach(p => pids.push(p.data().participantId));
             await joinRoom(pids.filter(pid => pid !== participantId).map(pid => ({ participantId: pid })));
         }, [db, joinRoom, participantId, roomId]),
-        leaveRoom: useCallback(leaveRoom, [leaveRoom]),
+        leaveRoom,
         roomId,
         setRoomId,
     };
