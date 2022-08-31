@@ -23,23 +23,16 @@ const useWebRTC = ({
     onIceCandidate = () => {}
 }) => {
     const [localStream, setLocalStream] = useState(null);
-    const [initialRtcConnection, setInitialRtcConnection] = useState(null);
     const [rtcPeers, setRtcPeers] = useState({});
     const peerAddedRef = useRef({});
 
     const receiveOffer = useCallback(async (participantId, offer) => {
         const remoteOffer = new RTCSessionDescription(offer);
-        const pc = initialRtcConnection ? initialRtcConnection.peerConnection : rtcPeers[participantId].peerConnection;
+        const pc = rtcPeers[participantId].peerConnection;
         if (pc.signalingState !== 'stable') {
             await pc.setRemoteDescription(remoteOffer);
         }
-        if (initialRtcConnection) {
-            setRtcPeers({
-                [participantId] : initialRtcConnection,
-            });
-            setInitialRtcConnection(null);
-        };
-    }, [rtcPeers, initialRtcConnection]);
+    }, [rtcPeers]);
 
     // create a peer connection for the participant by an id
     const addParticipant = useCallback(async ({ participantId, incomingOffer, iceCandidates }, { setPeers = true } = {}) => {
@@ -48,10 +41,7 @@ const useWebRTC = ({
             return;
         }
         peerAddedRef.current[participantId] = true;
-        // If this user was the first to join the room, the next participant to join uses this initial rtc peer connection from room create
-        if (initialRtcConnection) {
-            return receiveOffer(participantId, incomingOffer);
-        }
+
         // add user's local stream to the new peer connection
         const pc = new RTCPeerConnection(servers);
         localStream.getTracks().forEach((track) => {
@@ -105,10 +95,7 @@ const useWebRTC = ({
             iceCandidates.forEach(c => pc.addIceCandidate(c));
         }
 
-        // // set peers state to re-render component
-        if (participantId === 'init') {
-            setInitialRtcConnection({ peerConnection: pc, stream: remoteStream });
-        } else if (setPeers) {
+        if (setPeers) {
             setRtcPeers({
                 ...rtcPeers,
                 [participantId]: {
@@ -121,7 +108,7 @@ const useWebRTC = ({
             peerConnection: pc,
             stream: remoteStream,
         };
-    }, [localStream, rtcPeers, initialRtcConnection, onIceCandidate, sendOffer, sendAnswer, receiveOffer]);
+    }, [localStream, rtcPeers, onIceCandidate, sendOffer, sendAnswer]);
 
     const addIceCandidate = useCallback((participantId, data) => {
         const candidate = new RTCIceCandidate(
@@ -134,20 +121,15 @@ const useWebRTC = ({
     // join a room with a list of participants
     // participants: [participantIds]
     const joinRoom = useCallback(async (participants) => {
-        // return participants && participants.length ? Promise.all(participants.map(addParticipant)) : addParticipant({ participantId: 'init' });
-        if (participants && participants.length) {
-            const joinPeers = await participants.reduce(async (chain, nextParticipant) => {
-                const peers = await chain;
-                const rtcPeerObject = await addParticipant(nextParticipant, { setPeers: false });
-                return {
-                    ...peers,
-                    [nextParticipant.participantId]: rtcPeerObject,
-                }
-            }, Promise.resolve({}));
-            setRtcPeers(joinPeers)
-        } else {
-            addParticipant({ participantId: 'init' });
-        }
+        const joinPeers = await participants.reduce(async (chain, nextParticipant) => {
+            const peers = await chain;
+            const rtcPeerObject = await addParticipant(nextParticipant, { setPeers: false });
+            return {
+                ...peers,
+                [nextParticipant.participantId]: rtcPeerObject,
+            }
+        }, Promise.resolve({}));
+        setRtcPeers(joinPeers)
     }, [addParticipant]);
 
     // close all peer connections in a room

@@ -124,35 +124,7 @@ const useWebRTCFirebase = ({ db, participantId }) => {
             const callParticipantsCollectionRef = collection(callDoc, "participants");
             const participantCollectionSnapshot = await getDocs(callParticipantsCollectionRef)
             const pids = [];
-            participantCollectionSnapshot.forEach(p => p.data().id !== 'init' && pids.push(p.data().participantId));
-
-            const callParticipantForDocRef = doc(callParticipantsCollectionRef, participantId);
-            const myParticipantDoc = await getDoc(callParticipantForDocRef);
-            if (participantCollectionSnapshot.size === 1 && !myParticipantDoc.exists()) {
-                const participantsNotMe = pids.filter(pid => pid !== participantId);
-                const initParticipantId = participantsNotMe[0];
-                const initParticipantDocRef = doc(callParticipantsCollectionRef, initParticipantId, 'offers', 'init');
-                const init = await getDoc(initParticipantDocRef);
-
-                if (init.exists()) {
-                    const callParticipantOffersDoc = doc(callParticipantsCollectionRef, initParticipantId, 'offers', participantId);
-                    // move offer doc from 'init' to this participant's id space
-                    await setDoc(callParticipantOffersDoc, init.data());
-                    await deleteDoc(initParticipantDocRef);
-                    // get the init ice candidates
-                    const iceCandidatesDocs = await getDocs(collection(callDoc, 'participants', 'init', 'iceCandidates', initParticipantId, 'candidates'));
-                    const iceCandidates = iceCandidatesDocs.docs.map(doc => doc.data());
-                    // move ice candidates to the right spot
-                    await Promise.all(iceCandidates.map(async d => {
-                        await addDoc(collection(callDoc, 'participants', participantId, 'iceCandidates', initParticipantId, 'candidates'), d);
-                    }));
-                    // clean up init
-                    await deleteDoc(doc(callDoc, 'participants', 'init'));
-
-                    await joinRoom(pids.map(pid => ({ participantId: pid, incomingOffer: init.data().payload, iceCandidates })));
-                    return;
-                }
-            }
+            participantCollectionSnapshot.forEach(p => pids.push(p.data().participantId));
             await joinRoom(pids.filter(pid => pid !== participantId).map(pid => ({ participantId: pid })));
         }, [db, joinRoom, participantId, roomId]),
         leaveRoom: useCallback(leaveRoom, [leaveRoom]),
