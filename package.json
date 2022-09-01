@@ -17,8 +17,8 @@
     "url": "https://github.com/alecfriedman3/useWebRTC/issues"
   },
   "homepage": "https://github.com/alecfriedman3/useWebRTC#readme",
-  "dependencies": {
+  "peerDependencies": {
     "firebase": "^9.9.3",
-    "react": "^18.2.0"
+    "react": "^16.8.0"
   }
 }
