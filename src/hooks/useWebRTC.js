@@ -19,8 +19,10 @@ const useWebRTC = ({
     // participantId,
     sendOffer = () => {},
     sendAnswer = () => {},
+    sendIceCandidate = () => {},
     onLeave = () => {},
-    onIceCandidate = () => {}
+    onParticipantRemoved = () => {},
+    onAnswerReceived = () => {},
 }) => {
     const [localStream, setLocalStream] = useState(null);
     const [localScreenCaptureStream, setLocalScreenCaptureStream] = useState(null);
@@ -28,32 +30,42 @@ const useWebRTC = ({
     const [screenShareEnded, setScreenShareEnded] = useState(false);
     const [rtcPeers, setRtcPeers] = useState({});
     const peerAddedRef = useRef({});
+    const peerAnswerReceived = useRef({});
     const joinedRoom = useRef({ joined: true });
 
-    const receiveOffer = useCallback(async (participantId, offer) => {
-        const remoteOffer = new RTCSessionDescription(offer);
+    const receiveAnswer = useCallback(async (participantId, offer) => {
         const pc = rtcPeers[participantId].peerConnection;
-        if (pc.signalingState !== 'stable') {
-            await pc.setRemoteDescription(remoteOffer);
+        if (pc.signalingState === 'stable' || peerAnswerReceived.current[participantId]) {
+            return;
         }
-    }, [rtcPeers]);
+        peerAnswerReceived.current[participantId] = true;
+        const remoteOffer = new RTCSessionDescription(offer);
+        await pc.setRemoteDescription(remoteOffer);
+        onAnswerReceived(participantId);
+    }, [rtcPeers, onAnswerReceived]);
 
-    const _removePeer = useCallback((participantId) => {
-        const peersCopy = {
-            ...rtcPeers,
-        };
-        const { peerConnection, stream } = peersCopy[participantId];
-        delete peersCopy[participantId];
-        peerConnection.close();
-        stream.getTracks().forEach((track) => {
-          track.stop();
+    const removeParticipant = useCallback((participantId) => {
+        setRtcPeers((currentPeers) => {
+            const peersCopy = {
+                ...currentPeers,
+            };
+            if (peersCopy[participantId]) {
+                const { peerConnection, stream } = peersCopy[participantId];
+                delete peersCopy[participantId];
+                peerConnection.close();
+                stream.getTracks().forEach((track) => {
+                  track.stop();
+                });
+            }
+            return peersCopy;
         });
-        setRtcPeers(peersCopy);
         delete peerAddedRef.current[participantId]
-    }, [rtcPeers]);
+        delete peerAnswerReceived.current[participantId]
+        onParticipantRemoved(participantId);
+    }, [onParticipantRemoved]);
 
     // create a peer connection for the participant by an id
-    const addParticipant = useCallback(async ({ participantId, incomingOffer, iceCandidates }, { setPeers = true } = {}) => {
+    const addParticipant = useCallback(async ({ participantId, incomingOffer, iceCandidates }) => {
         // don't try to add participant multiple times
         if (peerAddedRef.current[participantId] || !joinedRoom.current.joined) {
             return;
@@ -77,14 +89,14 @@ const useWebRTC = ({
         // when the peer connection gets an ice candidate, handle the event
         pc.onicecandidate = (event) => {
             if (event.candidate) {
-                onIceCandidate(participantId, event.candidate.toJSON());
+                sendIceCandidate(participantId, event.candidate.toJSON());
             }
         };
 
         pc.onconnectionstatechange = (ev) => {
             switch(pc.connectionState) {
                 case "disconnected":
-                    _removePeer(participantId);
+                    removeParticipant(participantId);
                     break;
                 default:
             }
@@ -122,20 +134,18 @@ const useWebRTC = ({
             iceCandidates.forEach(c => pc.addIceCandidate(c));
         }
 
-        if (setPeers) {
-            setRtcPeers({
-                ...rtcPeers,
-                [participantId]: {
-                    peerConnection: pc,
-                    stream: remoteStream,
-                }
-            });
-        }
+        setRtcPeers((currentRtcPeers) => ({
+            ...currentRtcPeers,
+            [participantId]: {
+                peerConnection: pc,
+                stream: remoteStream,
+            }
+        }));
         return {
             peerConnection: pc,
             stream: remoteStream,
         };
-    }, [localStream, rtcPeers, onIceCandidate, sendOffer, sendAnswer, _removePeer]);
+    }, [localStream, sendIceCandidate, sendOffer, sendAnswer, removeParticipant]);
 
     const addIceCandidate = useCallback((participantId, data) => {
         if (!joinedRoom.current.joined) return;
@@ -150,28 +160,17 @@ const useWebRTC = ({
     // participants: [participantIds]
     const joinRoom = useCallback(async (participants) => {
         joinedRoom.current.joined = true;
-        const joinPeers = await participants.reduce(async (chain, nextParticipant) => {
-            const peers = await chain;
-            const rtcPeerObject = await addParticipant(nextParticipant, { setPeers: false });
-            return {
-                ...peers,
-                [nextParticipant.participantId]: rtcPeerObject,
-            }
-        }, Promise.resolve({}));
-        setRtcPeers(joinPeers)
+        return Promise.all(participants.map(addParticipant))
     }, [addParticipant]);
 
     // close all peer connections in a room
-    const leaveRoom = useCallback(() => {
-        for (const participantId in rtcPeers) {
-            const { peerConnection } = rtcPeers[participantId];
-            peerConnection.close();
-            delete peerAddedRef.current[participantId];
-        }
-        setRtcPeers({});
+    const leaveRoom = useCallback(async () => {
         joinedRoom.current.joined = false;
+        for (const participantId in rtcPeers) {
+            removeParticipant(participantId);
+        }
         onLeave();
-    }, [onLeave, rtcPeers]);
+    }, [onLeave, removeParticipant, rtcPeers]);
 
     const hasParticipant = useCallback((participantId) => {
         return !!rtcPeers[participantId];
@@ -238,28 +237,19 @@ const useWebRTC = ({
     }, [rtcPeers, localStream, localScreenCaptureStream, sharingScreen, screenShareEnded]);
 
     useEffect(() => {
-        window.onbeforeunload = function () {
-            leaveRoom();
-        }
-        return () => {
-            window.onbeforeunload = () => {};
-        }
-    }, [leaveRoom]);
-
-    useEffect(() => {
         const teardownPeerListeners = Object.keys(rtcPeers).map((pid) => {
             const { peerConnection } = rtcPeers[pid];
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    onIceCandidate(pid, event.candidate.toJSON());
+                    sendIceCandidate(pid, event.candidate.toJSON());
                 }
             };
 
             peerConnection.onconnectionstatechange = (ev) => {
                 switch(peerConnection.connectionState) {
                     case "disconnected":
-                        _removePeer(pid);
+                        removeParticipant(pid);
                         break;
                     default:
                 }
@@ -273,7 +263,7 @@ const useWebRTC = ({
         return () => {
             teardownPeerListeners.forEach(t => t());
         }
-    }, [rtcPeers, _removePeer, onIceCandidate]);
+    }, [rtcPeers, removeParticipant, sendIceCandidate]);
 
     useEffect(() => {
         const initStream = async () => {
@@ -295,7 +285,8 @@ const useWebRTC = ({
         addingParticipant,
         joinRoom,
         addParticipant,
-        receiveOffer,
+        removeParticipant,
+        receiveAnswer,
         addIceCandidate,
         leaveRoom,
     };

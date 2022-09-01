@@ -2,8 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { doc, collection, setDoc, addDoc, getDoc, onSnapshot, deleteDoc, getDocs, query } from  "firebase/firestore";
 import useWebRTC from "./useWebRTC";
 
+const INACTIVITY_TIMEOUT = 10000;
+
 const useWebRTCFirebase = ({ db, participantId }) => {
     const [roomId, setRoomId] = useState('');
+    const [offersSent, setOffersSent] = useState({});
+
     const {
         localStream,
         participants,
@@ -13,7 +17,8 @@ const useWebRTCFirebase = ({ db, participantId }) => {
         addingParticipant,
         joinRoom,
         addParticipant,
-        receiveOffer,
+        removeParticipant,
+        receiveAnswer,
         addIceCandidate,
         leaveRoom,
     } = useWebRTC({
@@ -25,6 +30,7 @@ const useWebRTCFirebase = ({ db, participantId }) => {
             const callParticipantOffersDoc = doc(callParticipantOffersCollectionRef, participantFor);
             await setDoc(callParticipantOffersDoc, { payload: offer, participantId: participantFor });
             await setDoc(callParticipantDocRef, { participantId })
+            setOffersSent(offers => ({ ...offers, [participantFor]: new Date() }));
         }, [roomId, db, participantId]),
         sendAnswer: useCallback(async (participantFor, answer) => {
             const callDocRef = doc(db, "calls", roomId);
@@ -39,55 +45,61 @@ const useWebRTCFirebase = ({ db, participantId }) => {
             const callParticipantDocRef = doc(callParticipantsCollectionRef, participantId);
             await setDoc(callParticipantDocRef, { participantId });
         }, [roomId, db, participantId]),
-        onLeave: async () => {
-            const callDocRef = doc(db, "calls", roomId);
-
-            const callParticipantsCollectionRef = collection(callDocRef, "participants");
-            const participantCollectionSnapshot = await getDocs(callParticipantsCollectionRef)
-            const pids = [];
-            participantCollectionSnapshot.forEach(p => pids.push(p.data().participantId));
-            await Promise.all(pids.map(async pid => {
-                if (pid === participantId) return;
-                const answersForMeRef = doc(callParticipantsCollectionRef, pid, 'answers', participantId);
-                await deleteDoc(answersForMeRef);
-                const offersForMeRef = doc(callParticipantsCollectionRef, pid, 'offers', participantId);
-                await deleteDoc(offersForMeRef);
-                const myAnswersRef = doc(callParticipantsCollectionRef, participantId, 'answers', pid);
-                await deleteDoc(myAnswersRef);
-                const myOffersRef = doc(callParticipantsCollectionRef, participantId, 'offers', pid);
-                await deleteDoc(myOffersRef);
-
-                const iceCandidatesForMeRef = collection(callParticipantsCollectionRef, pid, 'iceCandidates', participantId, 'candidates');
-                const iceCandidatesForMe = await getDocs(iceCandidatesForMeRef);
-                const iceCandidateDeletes = [];
-                iceCandidatesForMe.forEach(c => iceCandidateDeletes.push(
-                    deleteDoc(doc(iceCandidatesForMeRef, c.id))
-                ));
-                await Promise.all(iceCandidateDeletes);
-                await deleteDoc(doc(callParticipantsCollectionRef, pid, 'iceCandidates', participantId));
-
-                const myIceCandidatesRef = collection(callParticipantsCollectionRef, participantId, 'iceCandidates', pid, 'candidates');
-                const myIceCandidates = await getDocs(myIceCandidatesRef);
-                const myIceCandidatesDeletes = [];
-                myIceCandidates.forEach(c => myIceCandidatesDeletes.push(
-                    deleteDoc(doc(myIceCandidatesRef, c.id))
-                ));
-                await Promise.all(iceCandidateDeletes);
-                await deleteDoc(doc(callParticipantsCollectionRef, participantId, 'iceCandidates', pid))
-            }))
-            await deleteDoc(doc(callDocRef, 'participants', participantId));
-            setRoomId('');
-        },
-        onIceCandidate: async (participantFor, iceCandidate) => {
+        sendIceCandidate: useCallback(async (participantFor, iceCandidate) => {
             // send ice candidate to firestore
             const callDocRef = doc(db, "calls", roomId);
             const callParticipantsCollectionRef = collection(callDocRef, "participants");
             const callParticipantForDocRef = doc(callParticipantsCollectionRef, participantFor);
             const iceCandidatesForRef = collection(doc(collection(callParticipantForDocRef, "iceCandidates"), participantId), "candidates");
             await addDoc(iceCandidatesForRef, iceCandidate);
-        },
-    })
+        }, [db, participantId, roomId]),
+        onLeave: useCallback(async () => {
+            const callDocRef = doc(db, "calls", roomId);
+            await deleteDoc(doc(callDocRef, 'participants', participantId));
+            setRoomId('');
+            setOffersSent({});
+        }, [db, participantId, roomId]),
+        onParticipantRemoved: useCallback(async (participantFor) => {
+            const callDocRef = doc(db, "calls", roomId);
 
+            const callParticipantsCollectionRef = collection(callDocRef, "participants");
+
+            const answersForMeRef = doc(callParticipantsCollectionRef, participantFor, 'answers', participantId);
+            await deleteDoc(answersForMeRef);
+            const offersForMeRef = doc(callParticipantsCollectionRef, participantFor, 'offers', participantId);
+            await deleteDoc(offersForMeRef);
+            const myAnswersRef = doc(callParticipantsCollectionRef, participantId, 'answers', participantFor);
+            await deleteDoc(myAnswersRef);
+            const myOffersRef = doc(callParticipantsCollectionRef, participantId, 'offers', participantFor);
+            await deleteDoc(myOffersRef);
+
+
+            const iceCandidatesForMeRef = collection(callParticipantsCollectionRef, participantFor, 'iceCandidates', participantId, 'candidates');
+            const iceCandidatesForMe = await getDocs(iceCandidatesForMeRef);
+            const iceCandidateDeletes = [];
+            iceCandidatesForMe.forEach(c => iceCandidateDeletes.push(
+                deleteDoc(doc(iceCandidatesForMeRef, c.id))
+            ));
+            await Promise.all(iceCandidateDeletes);
+            await deleteDoc(doc(callParticipantsCollectionRef, participantFor, 'iceCandidates', participantId));
+
+            const myIceCandidatesRef = collection(callParticipantsCollectionRef, participantId, 'iceCandidates', participantFor, 'candidates');
+            const myIceCandidates = await getDocs(myIceCandidatesRef);
+            const myIceCandidatesDeletes = [];
+            myIceCandidates.forEach(c => myIceCandidatesDeletes.push(
+                deleteDoc(doc(myIceCandidatesRef, c.id))
+            ));
+            await Promise.all(iceCandidateDeletes);
+            await deleteDoc(doc(callParticipantsCollectionRef, participantId, 'iceCandidates', participantFor))
+        }, [db, participantId, roomId]),
+        onAnswerReceived: useCallback((participantFor) => {
+            setOffersSent((offers) => {
+                const newOffers = { ...offers };
+                delete newOffers[participantFor];
+                return newOffers;
+            });
+        }, []),
+    })
 
     useEffect(() => {
         let unsub;
@@ -104,7 +116,7 @@ const useWebRTCFirebase = ({ db, participantId }) => {
                 answersSnapshot.forEach(answer => {
                     const { payload, participantId: participantFrom } = answer.data();
                     if (hasParticipant(participantFrom)) {
-                        receiveOffer(participantFrom, payload);
+                        receiveAnswer(participantFrom, payload);
                     } else if (!hasParticipant(participantFrom) && participantFrom !== participantId && !addingParticipant(participantFrom)) {
                         addParticipant({ participantId: participantFrom, incomingOffer: payload });
                     }
@@ -117,7 +129,7 @@ const useWebRTCFirebase = ({ db, participantId }) => {
                         if (hasParticipant(id)) {
                             addIceCandidate(id, candidate.data());
                         } else {
-                            console.log('received ice candidates for non-added participant', id);
+                            console.warn('received ice candidates for non-added participant', id);
                         }
                     })
                 })
@@ -129,6 +141,12 @@ const useWebRTCFirebase = ({ db, participantId }) => {
                     const offerForMe = await getDoc(doc(callDoc, 'participants', participant.participantId, 'offers', participantId));
                     if (offerForMe.exists() && !hasParticipant(participant.participantId) && !addingParticipant(participant.participantId)) {
                         addParticipant({ participantId: participant.participantId, incomingOffer: offerForMe.data().payload });
+                    }
+                    const participantDoc = await getDoc(doc(callDoc, 'participants', participant.participantId));
+                    const participantData = participantDoc.data();
+                    if (participantData?.inactive && hasParticipant(participantData.participantId)) {
+                        console.warn('participant', participantData.participantId, 'became inactive')
+                        removeParticipant(participantData.participantId);
                     }
                 })
             })
@@ -148,7 +166,24 @@ const useWebRTCFirebase = ({ db, participantId }) => {
                 iceCandidateSubscriptions.forEach(us => us());
             }
         }
-    }, [addParticipant, hasParticipant, receiveOffer, addIceCandidate, addingParticipant, roomId, participantId, db, participants]);
+    }, [addParticipant, removeParticipant, hasParticipant, receiveAnswer, addIceCandidate, addingParticipant, roomId, participantId, db, participants]);
+
+    useEffect(() => {
+        const offerTimeouts = Object.keys(offersSent).map(pid => {
+            const offerTime = offersSent[pid];
+            const now = new Date();
+            return setTimeout(async () => {
+                removeParticipant(pid);
+                const callDocRef = doc(db, "calls", roomId);
+                await setDoc(doc(callDocRef, 'participants', pid), { participantId: pid, inactive: true });
+            }, INACTIVITY_TIMEOUT - (now - offerTime))
+        })
+        return () => {
+            offerTimeouts.forEach(t => {
+                clearTimeout(t)
+            });
+        }
+    }, [offersSent, removeParticipant, db, roomId]);
 
     return {
         localStream,
@@ -163,10 +198,18 @@ const useWebRTCFirebase = ({ db, participantId }) => {
         }, [db, participantId]),
         joinRoom: useCallback(async () => {
             const callDoc = doc(db, 'calls', roomId);
+            const callDocData = await getDoc(callDoc);
+            if (!callDocData.exists()) {
+                console.warn('call doesnt exist');
+                throw new Error(`Call ${roomId} cannot be found...`)
+            }
             const callParticipantsCollectionRef = collection(callDoc, "participants");
             const participantCollectionSnapshot = await getDocs(callParticipantsCollectionRef)
             const pids = [];
-            participantCollectionSnapshot.forEach(p => pids.push(p.data().participantId));
+            participantCollectionSnapshot.forEach(p => !p.data()?.inactive && pids.push(p.data().participantId));
+            if (!pids.length) {
+                await setDoc(doc(callDoc, 'participants', participantId), { participantId });
+            }
             await joinRoom(pids.filter(pid => pid !== participantId).map(pid => ({ participantId: pid })));
         }, [db, joinRoom, participantId, roomId]),
         leaveRoom,
