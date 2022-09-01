@@ -19,6 +19,6 @@
   "homepage": "https://github.com/alecfriedman3/useWebRTC#readme",
   "peerDependencies": {
     "firebase": "^9.9.3",
-    "react": "^16.8.0"
+    "react": ">=16.8.0"
   }
 }
